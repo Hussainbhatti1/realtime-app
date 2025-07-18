@@ -1,0 +1,13 @@
+# Node.js
+node_modules/
+.env
+uploads/
+*.zip
+
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.*
+
+# macOS
+.DS_Store

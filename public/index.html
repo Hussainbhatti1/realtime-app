@@ -1,0 +1,23 @@
+<h2>Chat</h2>
+<input id="msg" placeholder="Type message" />
+<button onclick="send()">Send</button>
+<ul id="chat"></ul>
+
+<form action="/upload" method="POST" enctype="multipart/form-data">
+  <input type="file" name="image" />
+  <button type="submit">Upload</button>
+</form>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  function send() {
+    const msg = document.getElementById("msg").value;
+    socket.emit("message", msg);
+  }
+  socket.on("message", (msg) => {
+    const li = document.createElement("li");
+    li.textContent = msg;
+    document.getElementById("chat").appendChild(li);
+  });
+</script>
