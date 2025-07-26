@@ -1,6 +1,6 @@
 resource "azurerm_resource_group" "rg" {
   name     = "project4RG"
-  location = "Canada Central"
+  location = "canadacentral"
 }
 
 resource "azurerm_service_plan" "plan" {
@@ -39,8 +39,8 @@ resource "azurerm_mssql_server" "sql" {
   resource_group_name          = azurerm_resource_group.rg.name
   location                     = azurerm_resource_group.rg.location
   version                      = "12.0"
-  administrator_login          = var.db_admin
-  administrator_login_password = var.db_password
+  administrator_login          = "sqladmin"
+  administrator_login_password = "YourPassword123!"
 }
 
 resource "azurerm_mssql_database" "db" {
