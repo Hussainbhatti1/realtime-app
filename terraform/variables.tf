@@ -1,9 +1,7 @@
 variable "db_admin" {
-  type = string
-  description = "sqladmin"
+  default = "sqladmin"
 }
 
 variable "db_password" {
-  type = string
-  description = "YourPassword123!"
+  default = "YourPassword123!"
 }
