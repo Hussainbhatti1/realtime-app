@@ -11,25 +11,21 @@ const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
 
-// Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(session({ secret: "secret123", resave: false, saveUninitialized: true }));
 app.use("/uploads", express.static("uploads"));
 app.use(express.static("public"));
 
-// Views
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 
-// Multer config
 const storage = multer.diskStorage({
   destination: "uploads/",
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
 });
 const upload = multer({ storage });
 
-// Routes
 app.get("/", (req, res) => {
   if (!req.session.user) return res.redirect("/login");
   res.sendFile(path.join(__dirname, "public/index.html"));
@@ -63,7 +59,6 @@ app.post("/upload", upload.single("image"), async (req, res) => {
   res.send("Uploaded!");
 });
 
-// Socket.IO
 io.on("connection", (socket) => {
   socket.on("message", async (msg) => {
     const db = await getPool();
@@ -74,6 +69,6 @@ io.on("connection", (socket) => {
 
 const port = process.env.PORT || 3000;
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
