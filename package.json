@@ -9,6 +9,9 @@
   "author": "",
   "license": "ISC",
   "description": "",
+  "engines": {
+  "node": "18.x"
+  },
   "dependencies": {
     "@azure/identity": "^4.10.1",
     "@azure/keyvault-secrets": "^4.10.0",
