@@ -1,3 +1,5 @@
+
+
 resource "azurerm_resource_group" "rg" {
   name     = "project4RG"
   location = "canadacentral"
@@ -9,6 +11,16 @@ resource "azurerm_service_plan" "plan" {
   resource_group_name = azurerm_resource_group.rg.name
   sku_name            = "B1"
   os_type             = "Linux"
+}
+
+data "azurerm_key_vault" "kv" {
+  name                = "project4KeyVault321"
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+data "azurerm_key_vault_secret" "db_password" {
+  name         = "db-password"
+  key_vault_id = data.azurerm_key_vault.kv.id
 }
 
 resource "azurerm_linux_web_app" "app" {
@@ -31,7 +43,14 @@ resource "azurerm_linux_web_app" "app" {
     "WEBSITE_RUN_FROM_PACKAGE"     = "1"
     "WEBSITE_NODE_DEFAULT_VERSION" = "~18"
     "KEYVAULT_NAME"                = "project4KeyVault321"
+    "DB_PASSWORD"                  = data.azurerm_key_vault_secret.db_password.value
   }
+}
+
+resource "azurerm_role_assignment" "keyvault_reader" {
+  scope                = data.azurerm_key_vault.kv.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id = azurerm_linux_web_app.app.identity[0].principal_id
 }
 
 resource "azurerm_mssql_server" "sql" {
