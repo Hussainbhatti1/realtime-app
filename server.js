@@ -9,75 +9,120 @@ const http = require('http');
 const socketio = require('socket.io');
 const fs = require('fs');
 
+// Configuration
+const isAzure = process.env.WEBSITE_SITE_NAME !== undefined;
+const PORT = isAzure ? process.env.PORT || 80 : process.env.PORT || 3000;
+const VIEWS_DIR = path.join(__dirname, 'views');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOAD_DIR = isAzure ? path.join(process.env.HOME, 'site', 'wwwroot', 'uploads') : path.join(__dirname, 'uploads');
+
 // Initialize app
 const app = express();
 const server = http.createServer(app);
-const io = socketio(server);
-const PORT = process.env.PORT || 3000;
+const io = socketio(server, {
+  transports: ['websocket'],
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
 
-// Configure file uploads
+// Ensure directories exist
+[VIEWS_DIR, PUBLIC_DIR, UPLOAD_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// File upload configuration
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = 'uploads/';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
   }
 });
 
 const upload = multer({ 
-  storage: storage,
+  storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+    if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/i)) {
       return cb(new Error('Only image files are allowed!'), false);
     }
     cb(null, true);
   }
 });
 
-// Session middleware
+// Session configuration
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: true,
-  cookie: { secure: process.env.NODE_ENV === 'production' }
+  cookie: { 
+    secure: isAzure,
+    httpOnly: true,
+    sameSite: 'strict',
+    maxAge: 24 * 60 * 60 * 1000
+  },
+  proxy: isAzure
 });
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.set('trust proxy', 1);
 app.use(sessionMiddleware);
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.static(path.join(__dirname, 'views')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Static file serving
+app.use(express.static(PUBLIC_DIR));
+app.use('/uploads', express.static(UPLOAD_DIR));
+
+// View routes with existence checking
+const serveView = (viewName) => (req, res) => {
+  const viewPath = path.join(VIEWS_DIR, `${viewName}.html`);
+  
+  if (!fs.existsSync(viewPath)) {
+    console.error(`View not found: ${viewPath}`);
+    return res.status(404).send(`
+      <h1>Page Not Found</h1>
+      <p>The requested page (${viewName}.html) doesn't exist.</p>
+      <p>Please check the views directory.</p>
+    `);
+  }
+
+  res.sendFile(viewPath, {
+    headers: { 'Content-Type': 'text/html' }
+  });
+};
 
 // Routes
 app.get('/', (req, res) => {
   if (!req.session.user) return res.redirect('/login');
-  res.sendFile(path.join(__dirname, 'views', 'chat.html'));
+  serveView('chat')(req, res);
 });
 
 app.get('/login', (req, res) => {
   if (req.session.user) return res.redirect('/');
-  res.sendFile(path.join(__dirname, 'views', 'login.html'));
+  serveView('login')(req, res);
 });
 
 app.get('/register', (req, res) => {
   if (req.session.user) return res.redirect('/');
-  res.sendFile(path.join(__dirname, 'views', 'register.html'));
+  serveView('register')(req, res);
 });
 
 app.get('/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/login');
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    views: fs.existsSync(VIEWS_DIR),
+    public: fs.existsSync(PUBLIC_DIR),
+    uploads: fs.existsSync(UPLOAD_DIR)
+  });
 });
 
 // Authentication Routes
@@ -185,6 +230,16 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
+// Error Handling
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).send(`
+    <h1>Server Error</h1>
+    <pre>${err.message}</pre>
+    <p>Check server logs for details.</p>
+  `);
+});
+
 // Socket.IO setup
 const wrap = middleware => (socket, next) => middleware(socket.request, {}, next);
 io.use(wrap(sessionMiddleware));
@@ -201,15 +256,19 @@ io.on('connection', (socket) => {
   
   socket.on('message', async (msg) => {
     try {
+      if (typeof msg !== 'string' || !msg.trim()) {
+        throw new Error('Invalid message format');
+      }
+
       const pool = await getPool();
       await pool.request()
-        .input('message', msg)
+        .input('message', msg.trim())
         .input('username', socket.user)
         .query('INSERT INTO Messages (content, username) VALUES (@message, @username)');
       
       io.emit('message', { 
         user: socket.user, 
-        text: msg,
+        text: msg.trim(),
         timestamp: new Date().toISOString()
       });
     } catch (error) {
@@ -218,29 +277,83 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected');
+  socket.on('disconnect', (reason) => {
+    console.log(`Client disconnected: ${reason}`);
   });
 });
 
-// Start Server
+// Server startup
 async function startServer() {
   try {
     console.log("Initializing application...");
+    console.log(`Environment: ${isAzure ? 'Azure' : 'Local'}`);
+    console.log(`Views directory: ${VIEWS_DIR}`);
+    console.log(`Public directory: ${PUBLIC_DIR}`);
+    console.log(`Uploads directory: ${UPLOAD_DIR}`);
+
+    // Verify view files exist
+    ['chat', 'login', 'register'].forEach(view => {
+      const viewPath = path.join(VIEWS_DIR, `${view}.html`);
+      if (!fs.existsSync(viewPath)) {
+        console.warn(`⚠️  View file missing: ${viewPath}`);
+      } else {
+        console.log(`✓ Found view: ${view}.html`);
+      }
+    });
+
+    // Database connection with retries
+    let dbConnected = false;
+    let retries = 3;
     
-    const dbConnected = await testConnection();
-    if (!dbConnected) throw new Error("Database connection failed");
+    while (retries > 0 && !dbConnected) {
+      try {
+        dbConnected = await testConnection();
+        if (!dbConnected) {
+          retries--;
+          console.log(`Database connection failed. Retries left: ${retries}`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      } catch (err) {
+        console.error('Database connection error:', err);
+        retries--;
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+
+    if (!dbConnected && isAzure) {
+      console.warn("⚠️  Running in limited mode without database connection");
+    } else if (!dbConnected) {
+      throw new Error("Database connection failed");
+    }
 
     server.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`- Chat: http://localhost:${PORT}`);
-      console.log(`- Login: http://localhost:${PORT}/login`);
-      console.log(`- Register: http://localhost:${PORT}/register`);
+      console.log(`🚀 Server running on port ${PORT}`);
+      if (isAzure) {
+        console.log(`🌐 Azure Web App URL: https://${process.env.WEBSITE_HOSTNAME}`);
+      } else {
+        console.log(`🔗 Local URLs:`);
+        console.log(`- Chat: http://localhost:${PORT}`);
+        console.log(`- Login: http://localhost:${PORT}/login`);
+        console.log(`- Register: http://localhost:${PORT}/register`);
+      }
     });
   } catch (err) {
-    console.error("FATAL: Failed to initialize app:", err);
-    process.exit(1);
+    console.error("💥 FATAL: Failed to initialize app:", err);
+    if (isAzure) {
+      setTimeout(() => process.exit(1), 5000);
+    } else {
+      process.exit(1);
+    }
   }
 }
+
+// Handle shutdown signals
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received. Closing server...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
 
 startServer();
