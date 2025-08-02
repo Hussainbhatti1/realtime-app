@@ -1,31 +1,55 @@
-const sql = require("mssql");
-const getDbConnectionString = require("./keyvault");
+const sql = require('mssql');
+const { getDbConfig } = require('./keyvault');
 
 let pool;
 
-async function connectDB() {
-  const connStr = await getDbConnectionString();
+async function initPool() {
+  const config = await getDbConfig();
+  
+  const dbConfig = {
+    server: config.server,
+    database: config.database,
+    user: config.user,
+    password: config.password,
+    options: {
+      encrypt: true,
+      trustServerCertificate: false
+    }
+  };
 
-  pool = await sql.connect(connStr);
-
-  const createTablesQuery = `
-    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' AND xtype='U')
-    CREATE TABLE Users (id INT PRIMARY KEY IDENTITY, username NVARCHAR(50), password NVARCHAR(255));
-
-    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Chats' AND xtype='U')
-    CREATE TABLE Chats (id INT PRIMARY KEY IDENTITY, message NVARCHAR(MAX), timestamp DATETIME);
-
-    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Images' AND xtype='U')
-    CREATE TABLE Images (id INT PRIMARY KEY IDENTITY, filename NVARCHAR(255), upload_time DATETIME);
-  `;
-
-  await pool.request().query(createTablesQuery);
-  return pool;
+  try {
+    console.log("Connecting to database...");
+    pool = await sql.connect(dbConfig);
+    console.log("Database connection established");
+    return pool;
+  } catch (err) {
+    console.error("Database connection failed:", err);
+    throw err;
+  }
 }
 
 async function getPool() {
-  if (!pool) await connectDB();
+  if (!pool) {
+    await initPool();
+  }
   return pool;
 }
 
-module.exports = getPool;
+// Add this function and export it
+async function testConnection() {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query("SELECT 1");
+    console.log("Database connection test successful");
+    return true;
+  } catch (err) {
+    console.error("Database connection test failed:", err);
+    return false;
+  }
+}
+
+module.exports = {
+  sql,
+  getPool,
+  testConnection // Now properly exported
+};

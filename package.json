@@ -7,7 +7,7 @@
   },
   "engines": {
     "node": "18.x"
-    },
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -16,12 +16,13 @@
     "@azure/identity": "^4.10.1",
     "@azure/keyvault-secrets": "^4.10.0",
     "bcryptjs": "^3.0.2",
-    "dotenv": "^17.2.0",
-    "ejs": "^3.1.9",
+    "dotenv": "^17.2.1",
+    "ejs": "^3.1.10",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
     "mssql": "^11.0.1",
     "multer": "^2.0.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
   }
 }

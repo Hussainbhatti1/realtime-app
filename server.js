@@ -1,189 +1,246 @@
 require('dotenv').config();
-const express = require("express");
-const http = require("http");
-const socketio = require("socket.io");
-const session = require("express-session");
-const bcrypt = require("bcryptjs");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const getPool = require("./db");
+const express = require('express');
+const path = require('path');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const { getPool, testConnection } = require('./db');
+const http = require('http');
+const socketio = require('socket.io');
+const fs = require('fs');
 
-// Initialize Express and Socket.io
+// Initialize app
 const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
-
-// Configuration
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
-// Ensure uploads directory exists
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
+// Configure file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+      return cb(new Error('Only image files are allowed!'), false);
+    }
+    cb(null, true);
+  }
+});
+
+// Session middleware
+const sessionMiddleware = session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: process.env.NODE_ENV === 'production' }
+});
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(session({ 
-  secret: process.env.SESSION_SECRET || "secret123", 
-  resave: false, 
-  saveUninitialized: true,
-  cookie: { secure: process.env.NODE_ENV === 'production' }
-}));
+app.use(sessionMiddleware);
 
-// Static files
+// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
+app.use(express.static(path.join(__dirname, 'views')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// View engine setup
-app.set("view engine", "ejs");
-app.set("views", path.join(__dirname, "views"));
+// Routes
+app.get('/', (req, res) => {
+  if (!req.session.user) return res.redirect('/login');
+  res.sendFile(path.join(__dirname, 'views', 'chat.html'));
+});
 
-// File upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+app.get('/login', (req, res) => {
+  if (req.session.user) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'views', 'login.html'));
+});
+
+app.get('/register', (req, res) => {
+  if (req.session.user) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'views', 'register.html'));
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
+
+// Authentication Routes
+app.post('/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const pool = await getPool();
+    
+    await pool.request()
+      .input('username', username)
+      .input('password', hashedPassword)
+      .query('INSERT INTO Users (username, password) VALUES (@username, @password)');
+    
+    res.redirect('/login');
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).send('Registration failed');
   }
 });
-const upload = multer({ storage });
 
-// Database connection check
-async function testDbConnection() {
+app.post('/login', async (req, res) => {
   try {
-    const db = await getPool();
-    await db.request().query("SELECT 1");
-    console.log("Database connection successful");
-    return true;
+    const { username, password } = req.body;
+    const pool = await getPool();
+    
+    const result = await pool.request()
+      .input('username', username)
+      .query('SELECT * FROM Users WHERE username = @username');
+    
+    if (result.recordset.length === 0) {
+      return res.status(401).send('Invalid username or password');
+    }
+    
+    const user = result.recordset[0];
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    
+    if (passwordMatch) {
+      req.session.user = username;
+      return res.redirect('/');
+    }
+    
+    res.status(401).send('Invalid username or password');
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).send('Login failed');
+  }
+});
+
+// File Upload Route
+app.post('/upload', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.session.user) {
+      return res.status(401).json({ success: false, message: 'Please login first' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+
+    const pool = await getPool();
+    
+    try {
+      await pool.request()
+        .input('filename', req.file.filename)
+        .input('originalname', req.file.originalname)
+        .input('username', req.session.user)
+        .input('path', req.file.path)
+        .input('size', req.file.size)
+        .input('mimetype', req.file.mimetype)
+        .query(`
+          INSERT INTO Images 
+          (filename, originalname, username, path, size, mimetype) 
+          VALUES (@filename, @originalname, @username, @path, @size, @mimetype)
+        `);
+    } catch (err) {
+      if (err.message.includes('Invalid column name')) {
+        await pool.request()
+          .input('filename', req.file.filename)
+          .input('username', req.session.user)
+          .query('INSERT INTO Images (filename, username) VALUES (@filename, @username)');
+      } else {
+        throw err;
+      }
+    }
+
+    res.json({ 
+      success: true,
+      message: 'File uploaded successfully',
+      file: {
+        filename: req.file.filename,
+        path: `/uploads/${req.file.filename}`
+      }
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    if (req.file?.path) {
+      fs.unlink(req.file.path, () => {});
+    }
+    res.status(500).json({ 
+      success: false, 
+      message: 'Upload failed',
+      error: error.message 
+    });
+  }
+});
+
+// Socket.IO setup
+const wrap = middleware => (socket, next) => middleware(socket.request, {}, next);
+io.use(wrap(sessionMiddleware));
+
+io.on('connection', (socket) => {
+  console.log('New client connected');
+  
+  if (!socket.request.session?.user) {
+    console.log('Unauthorized connection attempt');
+    return socket.disconnect(true);
+  }
+
+  socket.user = socket.request.session.user;
+  
+  socket.on('message', async (msg) => {
+    try {
+      const pool = await getPool();
+      await pool.request()
+        .input('message', msg)
+        .input('username', socket.user)
+        .query('INSERT INTO Messages (content, username) VALUES (@message, @username)');
+      
+      io.emit('message', { 
+        user: socket.user, 
+        text: msg,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Message save error:', error);
+      socket.emit('error', 'Failed to send message');
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Start Server
+async function startServer() {
+  try {
+    console.log("Initializing application...");
+    
+    const dbConnected = await testConnection();
+    if (!dbConnected) throw new Error("Database connection failed");
+
+    server.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`- Chat: http://localhost:${PORT}`);
+      console.log(`- Login: http://localhost:${PORT}/login`);
+      console.log(`- Register: http://localhost:${PORT}/register`);
+    });
   } catch (err) {
-    console.error("Database connection failed:", err);
-    return false;
+    console.error("FATAL: Failed to initialize app:", err);
+    process.exit(1);
   }
 }
 
-// Routes
-app.get("/", async (req, res) => {
-  if (!req.session.user) return res.redirect("/login");
-  
-  // Verify DB connection before proceeding
-  if (!await testDbConnection()) {
-    return res.status(500).send("Database connection error");
-  }
-  
-  res.sendFile(path.join(__dirname, "public/index.html"));
-});
-
-app.get("/login", (req, res) => {
-  res.sendFile(path.join(__dirname, "views/login.html"));
-});
-
-app.get("/register", (req, res) => {
-  res.sendFile(path.join(__dirname, "views/register.html"));
-});
-
-app.post("/register", async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const hashed = await bcrypt.hash(password, 10);
-    const db = await getPool();
-    
-    await db.request()
-      .input("username", username)
-      .input("password", hashed)
-      .query("INSERT INTO Users (username, password) VALUES (@username, @password)");
-      
-    res.redirect("/login");
-  } catch (err) {
-    console.error("Registration error:", err);
-    res.status(500).send("Registration failed");
-  }
-});
-
-app.post("/login", async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const db = await getPool();
-    
-    const result = await db.request()
-      .input("username", username)
-      .query("SELECT * FROM Users WHERE username = @username");
-      
-    if (result.recordset.length && await bcrypt.compare(password, result.recordset[0].password)) {
-      req.session.user = username;
-      return res.redirect("/");
-    }
-    
-    res.send("Login failed");
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).send("Login failed");
-  }
-});
-
-app.post("/upload", upload.single("image"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).send("No file uploaded");
-    }
-    
-    const db = await getPool();
-    await db.request()
-      .input("filename", req.file.filename)
-      .query("INSERT INTO Images (filename, upload_time) VALUES (@filename, GETDATE())");
-      
-    res.send("Uploaded!");
-  } catch (err) {
-    console.error("Upload error:", err);
-    res.status(500).send("Upload failed");
-  }
-});
-
-// Socket.io events
-io.on("connection", (socket) => {
-  console.log("New client connected");
-  
-  socket.on("message", async (msg) => {
-    try {
-      const db = await getPool();
-      await db.request()
-        .input("message", msg)
-        .query("INSERT INTO Chats (message, timestamp) VALUES (@message, GETDATE())");
-        
-      io.emit("message", msg);
-    } catch (err) {
-      console.error("Message error:", err);
-    }
-  });
-  
-  socket.on("disconnect", () => {
-    console.log("Client disconnected");
-  });
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send('Something broke!');
-});
-
-// Start server
-server.listen(PORT, HOST, () => {
-  console.log(`Server running on http://${HOST}:${PORT}`);
-  
-  // Test database connection on startup
-  testDbConnection();
-});
-
-// Handle process termination
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
+startServer();

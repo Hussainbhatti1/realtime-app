@@ -1,7 +1,21 @@
-<form method="POST" action="/login">
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 400px; margin: 50px auto; }
+    form { display: flex; flex-direction: column; gap: 10px; }
+    input { padding: 8px; }
+    button { padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Login</h2>
+  <form method="POST" action="/login">
     <input name="username" placeholder="Username" required>
     <input type="password" name="password" placeholder="Password" required>
-    <button>Login</button>
+    <button type="submit">Login</button>
   </form>
-  <a href="/register">Register</a>
-  
+  <p>Don't have an account? <a href="/register">Register</a></p>
+</body>
+</html>
