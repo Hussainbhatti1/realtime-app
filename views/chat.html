@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Realtime Chat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .row { display: flex; gap: 24px; }
+    .card { flex: 1; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
+    #messages { list-style: none; padding: 0; margin: 0; max-height: 420px; overflow: auto; }
+    #messages li { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }
+    form { display: flex; gap: 8px; margin-top: 12px; }
+    input[type="text"] { flex: 1; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    button { padding: 10px 14px; border: 1px solid #0ea5e9; background: #0ea5e9; color: #fff; border-radius: 8px; cursor: pointer; }
+    button.secondary { background: #fff; color: #0ea5e9; }
+    .thumb { max-width: 100%; border-radius: 8px; border: 1px solid #e5e7eb; }
+    .muted { color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Realtime Chat</h1>
+    <nav>
+      <a href="/logout"><button class="secondary" type="button">Logout</button></a>
+    </nav>
+  </header>
+
+  <div class="row">
+    <section class="card">
+      <h2>Messages</h2>
+      <ul id="messages"></ul>
+      <form id="msgForm" autocomplete="off">
+        <input id="m" type="text" placeholder="Type a message..." required />
+        <button type="submit">Send</button>
+      </form>
+      <p class="muted">Messages are stored in the <code>Messages</code> table.</p>
+    </section>
+
+    <section class="card">
+      <h2>Upload an image</h2>
+      <form id="uploadForm" enctype="multipart/form-data" method="post" action="/upload">
+        <input type="file" id="image" name="image" accept="image/*" required />
+        <button type="submit">Upload</button>
+      </form>
+      <div id="preview"></div>
+      <p class="muted">Images go to the <code>Images</code> table and files are served from <code>/uploads</code>.</p>
+    </section>
+  </div>
+
+  <!-- Socket.IO client is served by the server at /socket.io/socket.io.js -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    (function () {
+      const socket = io({ transports: ['websocket', 'polling'] });
+
+      const $messages = document.getElementById('m
