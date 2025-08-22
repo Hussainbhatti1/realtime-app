@@ -8,6 +8,15 @@ const { getPool, testConnection } = require('./db');
 const http = require('http');
 const socketio = require('socket.io');
 const fs = require('fs');
+const ensureDir = (dir) => {
+  try {
+    // On Azure, wwwroot is read-only; only create under /home
+    if (isAzure && !dir.startsWith('/home')) return;
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    console.warn('Directory init skipped:', dir, e.message);
+  }
+};
 
 const isAzure = process.env.WEBSITE_SITE_NAME !== undefined;
 const PORT = process.env.PORT ? Number(process.env.PORT) : (isAzure ? 8080 : 3000);
@@ -28,9 +37,7 @@ const io = socketio(server, {
 });
 
 // Ensure directories exist
-[VIEWS_DIR, PUBLIC_DIR, UPLOAD_DIR].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+ensureDir(UPLOAD_DIR);
 
 // File upload config
 const storage = multer.diskStorage({
