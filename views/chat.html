@@ -7,16 +7,23 @@
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-    .row { display: flex; gap: 24px; }
+    .row { display: flex; gap: 24px; align-items: flex-start; }
     .card { flex: 1; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
     #messages { list-style: none; padding: 0; margin: 0; max-height: 420px; overflow: auto; }
-    #messages li { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }
+    #messages li { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
     form { display: flex; gap: 8px; margin-top: 12px; }
     input[type="text"] { flex: 1; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
-    button { padding: 10px 14px; border: 1px solid #0ea5e9; background: #0ea5e9; color: #fff; border-radius: 8px; cursor: pointer; }
+    button { padding: 8px 12px; border: 1px solid #0ea5e9; background: #0ea5e9; color: #fff; border-radius: 8px; cursor: pointer; }
     button.secondary { background: #fff; color: #0ea5e9; }
-    .thumb { max-width: 100%; border-radius: 8px; border: 1px solid #e5e7eb; }
     .muted { color: #6b7280; font-size: 12px; }
+    .danger { background: #ef4444; border-color: #ef4444; }
+    /* Collage grid */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 12px; }
+    .tile { position: relative; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+    .tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .tile .actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 6px; }
+    .tile .actions button { padding: 4px 6px; font-size: 11px; border-radius: 6px; }
+    .row-actions { display: flex; align-items: center; gap: 6px; }
   </style>
 </head>
 <body>
@@ -35,24 +42,179 @@
         <input id="m" type="text" placeholder="Type a message..." required />
         <button type="submit">Send</button>
       </form>
-      <p class="muted">Messages are stored in the <code>Messages</code> table.</p>
+      <p class="muted">Only your own messages are visible to you.</p>
     </section>
 
     <section class="card">
-      <h2>Upload an image</h2>
+      <h2>Your images</h2>
       <form id="uploadForm" enctype="multipart/form-data" method="post" action="/upload">
         <input type="file" id="image" name="image" accept="image/*" required />
         <button type="submit">Upload</button>
       </form>
-      <div id="preview"></div>
-      <p class="muted">Images go to the <code>Images</code> table and files are served from <code>/uploads</code>.</p>
+      <div id="gallery" class="grid"></div>
+      <p class="muted">Only images you upload are visible in this gallery.</p>
     </section>
   </div>
 
-  <!-- Socket.IO client is served by the server at /socket.io/socket.io.js -->
-  <script src="/socket.io/socket.io.js"></script>
   <script>
     (function () {
-      const socket = io({ transports: ['websocket', 'polling'] });
+      const $messages = document.getElementById('messages');
+      const $form = document.getElementById('msgForm');
+      const $input = document.getElementById('m');
 
-      const $messages = document.getElementById('m
+      const $uploadForm = document.getElementById('uploadForm');
+      const $gallery = document.getElementById('gallery');
+
+      function el(tag, attrs = {}, text) {
+        const n = document.createElement(tag);
+        Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v));
+        if (text !== undefined) n.textContent = text;
+        return n;
+      }
+
+      // -------- Messages ----------
+      function renderMessageRow(msg) {
+        // msg: { Id, Username, Body, CreatedAt }
+        const li = el('li', { 'data-id': msg.Id });
+        const left = el('div');
+        const who = el('strong', {}, (msg.Username || 'you') + ': ');
+        const body = el('span', {}, msg.Body);
+        const when = el('span', { class: 'muted' }, ' — ' + new Date(msg.CreatedAt).toLocaleString());
+        left.appendChild(who); left.appendChild(body); left.appendChild(when);
+
+        const right = el('div', { class: 'row-actions' });
+        const del = el('button', { class: 'danger', type: 'button' }, 'Delete');
+        del.addEventListener('click', async () => {
+          const id = msg.Id;
+          try {
+            const res = await fetch(`/api/messages/${id}`, { method: 'DELETE' });
+            const json = await res.json();
+            if (json.ok) {
+              li.remove();
+            } else {
+              console.warn('Delete message failed', json);
+            }
+          } catch (e) {
+            console.error('Delete message error', e);
+          }
+        });
+        right.appendChild(del);
+
+        li.appendChild(left);
+        li.appendChild(right);
+        return li;
+      }
+
+      async function loadMessages() {
+        try {
+          const res = await fetch('/api/messages');
+          if (!res.ok) {
+            console.error('GET /api/messages failed', res.status);
+            return;
+          }
+          const json = await res.json();
+          if (json.ok && Array.isArray(json.data)) {
+            $messages.innerHTML = '';
+            json.data.forEach(m => $messages.appendChild(renderMessageRow(m)));
+            $messages.scrollTop = $messages.scrollHeight;
+          }
+        } catch (e) {
+          console.error('loadMessages failed', e);
+        }
+      }
+
+      $form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = $input.value.trim();
+        if (!text) return;
+        try {
+          const res = await fetch('/api/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: text })
+          });
+          const json = await res.json();
+          if (json.ok && json.data) {
+            $messages.appendChild(renderMessageRow(json.data));
+            $messages.scrollTop = $messages.scrollHeight;
+            $input.value = '';
+            $input.focus();
+          } else {
+            console.warn('save message failed', json);
+          }
+        } catch (err) {
+          console.error('submit failed', err);
+        }
+      });
+
+      // -------- Images ----------
+      function renderImageTile(img) {
+        // img: { Id, filename, url, CreatedAt, size, mimetype }
+        const tile = el('div', { class: 'tile', 'data-id': img.Id });
+        const image = el('img', { src: img.url, alt: img.filename });
+        const actions = el('div', { class: 'actions' });
+        const del = el('button', { class: 'danger', type: 'button' }, 'Delete');
+        del.addEventListener('click', async () => {
+          try {
+            const res = await fetch(`/api/images/${img.Id}`, { method: 'DELETE' });
+            const json = await res.json();
+            if (json.ok) {
+              tile.remove();
+            } else {
+              console.warn('Delete image failed', json);
+            }
+          } catch (e) {
+            console.error('Delete image error', e);
+          }
+        });
+
+        actions.appendChild(del);
+        tile.appendChild(image);
+        tile.appendChild(actions);
+        return tile;
+      }
+
+      async function loadImages() {
+        try {
+          const res = await fetch('/api/images');
+          if (!res.ok) {
+            console.error('GET /api/images failed', res.status);
+            return;
+          }
+          const json = await res.json();
+          if (json.ok && Array.isArray(json.data)) {
+            $gallery.innerHTML = '';
+            json.data.forEach(img => $gallery.appendChild(renderImageTile(img)));
+          }
+        } catch (e) {
+          console.error('loadImages failed', e);
+        }
+      }
+
+      // Intercept upload form to stay on page
+      $uploadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData($uploadForm);
+        try {
+          const res = await fetch('/upload', { method: 'POST', body: formData });
+          const json = await res.json();
+          if (json.success) {
+            // Refresh gallery after successful upload
+            await loadImages();
+            // Reset file input
+            $uploadForm.reset();
+          } else {
+            console.warn('Upload failed', json);
+          }
+        } catch (err) {
+          console.error('Upload error', err);
+        }
+      });
+
+      // Initial loads
+      loadMessages();
+      loadImages();
+    })();
+  </script>
+</body>
+</html>
